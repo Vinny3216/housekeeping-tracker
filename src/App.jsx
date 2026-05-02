@@ -25,7 +25,7 @@ function App() {
   const [hourlyRate, setHourlyRate] = useState('16.5')
   const [stats, setStats] = useState(null)
 
-  // page: 'form' | 'history' | 'stats' | 'estimator'
+  // page: 'form' | 'history' | 'stats' | 'tools'
   const [currentPage, setCurrentPage] = useState('form')
 
   // edit mode
@@ -33,6 +33,9 @@ function App() {
 
   // history month expand
   const [expandedMonth, setExpandedMonth] = useState(null)
+
+  // tools
+  const [activeTool, setActiveTool] = useState('estimator')
 
   // estimator
   const [estCheckout, setEstCheckout] = useState('')
@@ -44,12 +47,17 @@ function App() {
   const [estMode, setEstMode] = useState('outtime')
   const [estResult, setEstResult] = useState(null)
 
+  // break timer
+  const [breakStartTime, setBreakStartTime] = useState('')
+  const [breakDuration, setBreakDuration] = useState('30')
+  const [breakEndResult, setBreakEndResult] = useState(null)
+
   // load records on mount
   useEffect(() => {
     fetchRecords()
   }, [])
 
-  // parse number input to time string "HH:MM"
+  // parse number input to time
   function parseTimeInput(val) {
     const num = val.replace(/[^0-9]/g, '')
     if (num.length <= 2) return null
@@ -62,12 +70,10 @@ function App() {
     return null
   }
 
-  // convert parsed time to 24h "HH:MM" for database
   function toDbTime(hour, minute) {
     return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
   }
 
-  // format time for display
   function formatTime12(time24) {
     if (!time24) return ''
     const parts = time24.split(':')
@@ -79,7 +85,6 @@ function App() {
     return `${h - 12}:${m} PM`
   }
 
-  // fetch all records from database
   async function fetchRecords() {
     const { data, error } = await supabase
       .from('work_records')
@@ -93,7 +98,6 @@ function App() {
     }
   }
 
-  // calculate total hours and RPH
   function calculate() {
     const inParsed = parseTimeInput(inTimeInput)
     const outParsed = parseTimeInput(outTimeInput)
@@ -126,7 +130,6 @@ function App() {
     setRph(Math.round(rphVal * 100) / 100)
   }
 
-  // save or update record
   async function saveRecord() {
     if (totalHours === null || rph === null) {
       alert('Please calculate first')
@@ -172,7 +175,6 @@ function App() {
     }
   }
 
-  // clear form
   function clearForm() {
     setWorkDate('')
     setCheckoutRooms('')
@@ -186,7 +188,6 @@ function App() {
     setEditingId(null)
   }
 
-  // delete record
   async function deleteRecord(id) {
     if (!window.confirm('Are you sure you want to delete this record?')) return
 
@@ -202,7 +203,6 @@ function App() {
     }
   }
 
-  // load record into form for editing
   function editRecord(record) {
     setWorkDate(record.work_date)
     setCheckoutRooms(String(record.checkout_rooms))
@@ -219,7 +219,6 @@ function App() {
     setCurrentPage('form')
   }
 
-  // calculate pay period stats
   function calculateStats() {
     if (!startDate || !endDate) {
       alert('Please select start and end dates')
@@ -249,7 +248,6 @@ function App() {
     })
   }
 
-  // show preview of parsed time
   function timePreview(val) {
     const parsed = parseTimeInput(val)
     if (!parsed) return ''
@@ -257,7 +255,6 @@ function App() {
     return formatTime12(toDbTime(parsed.hour, parsed.minute))
   }
 
-  // calculate standard estimate
   function calculateStandard() {
     const inParsed = parseTimeInput(estInTime)
     if (!inParsed || !estCheckout || !estStayover) {
@@ -270,20 +267,16 @@ function App() {
     const breakVal = parseFloat(estBreak) || 0
     const totalRooms = coNum + soNum
 
-    // standard: 40 min per C/O, 20 min per S/O
     const standardMinutes = coNum * 40 + soNum * 20
     const standardHours = standardMinutes / 60
 
-    // standard out time
     const inTotalMinutes = inParsed.hour * 60 + inParsed.minute
     const outTotalMinutes = inTotalMinutes + standardMinutes + breakVal * 60
     const outHour = Math.floor(outTotalMinutes / 60)
     const outMinute = Math.round(outTotalMinutes % 60)
 
-    // standard RPH
     const standardRph = totalRooms / standardHours
 
-    // comparison
     let compare = null
 
     if (estMode === 'outtime' && estOutTime) {
@@ -332,6 +325,23 @@ function App() {
     })
   }
 
+  // break timer
+  function calculateBreakEnd() {
+    const parsed = parseTimeInput(breakStartTime)
+    if (!parsed) {
+      alert('Please enter break start time')
+      return
+    }
+    const totalMin = parsed.hour * 60 + parsed.minute + parseInt(breakDuration)
+    const endHour = Math.floor(totalMin / 60)
+    const endMin = totalMin % 60
+    setBreakEndResult({
+      startDisplay: formatTime12(toDbTime(parsed.hour, parsed.minute)),
+      endDisplay: formatTime12(toDbTime(endHour, endMin)),
+      duration: breakDuration
+    })
+  }
+
   return (
     <div className="app">
       <h1>Housekeeping Tracker</h1>
@@ -356,10 +366,10 @@ function App() {
           Stats
         </button>
         <button
-          className={currentPage === 'estimator' ? 'active' : ''}
-          onClick={() => setCurrentPage('estimator')}
+          className={currentPage === 'tools' ? 'active' : ''}
+          onClick={() => setCurrentPage('tools')}
         >
-          Estimator
+          Tools
         </button>
       </div>
 
@@ -525,107 +535,156 @@ function App() {
         </div>
       )}
 
-      {currentPage === 'estimator' && (
+      {currentPage === 'tools' && (
         <div className="form-section">
-          <h2>Standard Time Estimator</h2>
+          <h2>Tools</h2>
 
           <div className="field-card">
-            <label>In Time <span className="time-hint">e.g. 800 = 8:00 AM</span></label>
-            <input
-              type="text"
-              inputMode="numeric"
-              placeholder="e.g. 800"
-              value={estInTime}
-              onChange={e => { setEstInTime(e.target.value); setEstResult(null) }}
-            />
-            {estInTime && <div className="time-preview">{timePreview(estInTime)}</div>}
-          </div>
-
-          <div className="field-card">
-            <label>C/O (Checkout Rooms)</label>
-            <input type="number" min="0" value={estCheckout} onChange={e => { setEstCheckout(e.target.value); setEstResult(null) }} />
-          </div>
-
-          <div className="field-card">
-            <label>S/O (Stayover Rooms)</label>
-            <input type="number" min="0" value={estStayover} onChange={e => { setEstStayover(e.target.value); setEstResult(null) }} />
-          </div>
-
-          <div className="field-card">
-            <label>Break</label>
-            <select value={estBreak} onChange={e => { setEstBreak(e.target.value); setEstResult(null) }}>
-              <option value="0">No break</option>
-              <option value="0.5">30 min</option>
+            <label>Select Tool</label>
+            <select value={activeTool} onChange={e => setActiveTool(e.target.value)}>
+              <option value="estimator">Standard Estimator</option>
+              <option value="breaktimer">Break Timer</option>
             </select>
           </div>
 
-          <button className="calc-btn" onClick={calculateStandard}>Calculate Standard</button>
-
-          {estResult && (
-            <div className="result">
-              <p><strong>--- Standard Reference ---</strong></p>
-              <p>Standard Work Time: <strong>{estResult.standardMinutes} min ({estResult.standardHours} hrs)</strong></p>
-              <p>Standard Out Time: <strong>{formatTime12(estResult.standardOutTime)}</strong></p>
-              <p>Standard RPH: <strong>{estResult.standardRph}</strong></p>
-            </div>
-          )}
-
-          {estResult && (
+          {activeTool === 'breaktimer' && (
             <>
-              <div className="field-card" style={{marginTop: '16px'}}>
-                <label>Compare By</label>
-                <select value={estMode} onChange={e => { setEstMode(e.target.value); setEstOutTime(''); setEstTargetRph(''); setEstResult({...estResult, compare: null}) }}>
-                  <option value="outtime">By Out Time</option>
-                  <option value="rph">By Target RPH</option>
+              <div className="field-card">
+                <label>Break Start Time <span className="time-hint">e.g. 1130 = 11:30 AM</span></label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="e.g. 1130"
+                  value={breakStartTime}
+                  onChange={e => { setBreakStartTime(e.target.value); setBreakEndResult(null) }}
+                />
+                {breakStartTime && <div className="time-preview">{timePreview(breakStartTime)}</div>}
+              </div>
+
+              <div className="field-card">
+                <label>Break Duration</label>
+                <select value={breakDuration} onChange={e => { setBreakDuration(e.target.value); setBreakEndResult(null) }}>
+                  <option value="15">15 min</option>
+                  <option value="20">20 min</option>
+                  <option value="30">30 min</option>
+                  <option value="45">45 min</option>
+                  <option value="60">1 hour</option>
                 </select>
               </div>
 
-              {estMode === 'outtime' && (
-                <div className="field-card">
-                  <label>Your Estimated Out Time <span className="time-hint">e.g. 1430 = 2:30 PM</span></label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="e.g. 1430"
-                    value={estOutTime}
-                    onChange={e => setEstOutTime(e.target.value)}
-                  />
-                  {estOutTime && <div className="time-preview">{timePreview(estOutTime)}</div>}
+              <button className="calc-btn" onClick={calculateBreakEnd}>Calculate</button>
+
+              {breakEndResult && (
+                <div className="result">
+                  <p>Break Start: <strong>{breakEndResult.startDisplay}</strong></p>
+                  <p>Duration: <strong>{breakEndResult.duration} min</strong></p>
+                  <p>Back to Work: <strong style={{fontSize: '20px', color: '#4CAF50'}}>{breakEndResult.endDisplay}</strong></p>
                 </div>
               )}
-
-              {estMode === 'rph' && (
-                <div className="field-card">
-                  <label>Your Target RPH</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    placeholder="e.g. 1.5"
-                    value={estTargetRph}
-                    onChange={e => setEstTargetRph(e.target.value)}
-                  />
-                </div>
-              )}
-
-              <button className="calc-btn" style={{marginTop: '10px'}} onClick={calculateStandard}>Compare</button>
             </>
           )}
 
-          {estResult && estResult.compare && (
-            <div className="stats-result">
-              <p><strong>--- Your Estimate vs Standard ---</strong></p>
-              <p>Your Work Hours: <strong>{estResult.compare.workHours} hrs</strong></p>
-              <p>Your RPH: <strong>{estResult.compare.rph}</strong></p>
-              {estMode === 'rph' && estResult.compare.outTime && (
-                <p>You Need to Finish By: <strong>{formatTime12(estResult.compare.outTime)}</strong></p>
+          {activeTool === 'estimator' && (
+            <>
+              <div className="field-card">
+                <label>In Time <span className="time-hint">e.g. 800 = 8:00 AM</span></label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="e.g. 800"
+                  value={estInTime}
+                  onChange={e => { setEstInTime(e.target.value); setEstResult(null) }}
+                />
+                {estInTime && <div className="time-preview">{timePreview(estInTime)}</div>}
+              </div>
+
+              <div className="field-card">
+                <label>C/O (Checkout Rooms)</label>
+                <input type="number" min="0" value={estCheckout} onChange={e => { setEstCheckout(e.target.value); setEstResult(null) }} />
+              </div>
+
+              <div className="field-card">
+                <label>S/O (Stayover Rooms)</label>
+                <input type="number" min="0" value={estStayover} onChange={e => { setEstStayover(e.target.value); setEstResult(null) }} />
+              </div>
+
+              <div className="field-card">
+                <label>Break</label>
+                <select value={estBreak} onChange={e => { setEstBreak(e.target.value); setEstResult(null) }}>
+                  <option value="0">No break</option>
+                  <option value="0.5">30 min</option>
+                </select>
+              </div>
+
+              <button className="calc-btn" onClick={calculateStandard}>Calculate Standard</button>
+
+              {estResult && (
+                <div className="result">
+                  <p><strong>--- Standard Reference ---</strong></p>
+                  <p>Standard Work Time: <strong>{estResult.standardMinutes} min ({estResult.standardHours} hrs)</strong></p>
+                  <p>Standard Out Time: <strong>{formatTime12(estResult.standardOutTime)}</strong></p>
+                  <p>Standard RPH: <strong>{estResult.standardRph}</strong></p>
+                </div>
               )}
-              <p>RPH Difference: <strong style={{color: estResult.compare.rphDiff >= 0 ? '#f44336' : '#4CAF50'}}>
-                {estResult.compare.rphDiff > 0 ? '+' : ''}{estResult.compare.rphDiff}
-              </strong></p>
-              <p>Time Difference: <strong style={{color: estResult.compare.minutesDiff > 0 ? '#f44336' : '#4CAF50'}}>
-                {estResult.compare.minutesDiff > 0 ? '+' : ''}{estResult.compare.minutesDiff} min
-              </strong></p>
-            </div>
+
+              {estResult && (
+                <>
+                  <div className="field-card" style={{marginTop: '16px'}}>
+                    <label>Compare By</label>
+                    <select value={estMode} onChange={e => { setEstMode(e.target.value); setEstOutTime(''); setEstTargetRph(''); setEstResult({...estResult, compare: null}) }}>
+                      <option value="outtime">By Out Time</option>
+                      <option value="rph">By Target RPH</option>
+                    </select>
+                  </div>
+
+                  {estMode === 'outtime' && (
+                    <div className="field-card">
+                      <label>Your Estimated Out Time <span className="time-hint">e.g. 1430 = 2:30 PM</span></label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="e.g. 1430"
+                        value={estOutTime}
+                        onChange={e => setEstOutTime(e.target.value)}
+                      />
+                      {estOutTime && <div className="time-preview">{timePreview(estOutTime)}</div>}
+                    </div>
+                  )}
+
+                  {estMode === 'rph' && (
+                    <div className="field-card">
+                      <label>Your Target RPH</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        placeholder="e.g. 1.5"
+                        value={estTargetRph}
+                        onChange={e => setEstTargetRph(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  <button className="calc-btn" style={{marginTop: '10px'}} onClick={calculateStandard}>Compare</button>
+                </>
+              )}
+
+              {estResult && estResult.compare && (
+                <div className="stats-result">
+                  <p><strong>--- Your Estimate vs Standard ---</strong></p>
+                  <p>Your Work Hours: <strong>{estResult.compare.workHours} hrs</strong></p>
+                  <p>Your RPH: <strong>{estResult.compare.rph}</strong></p>
+                  {estMode === 'rph' && estResult.compare.outTime && (
+                    <p>You Need to Finish By: <strong>{formatTime12(estResult.compare.outTime)}</strong></p>
+                  )}
+                  <p>RPH Difference: <strong style={{color: estResult.compare.rphDiff >= 0 ? '#f44336' : '#4CAF50'}}>
+                    {estResult.compare.rphDiff > 0 ? '+' : ''}{estResult.compare.rphDiff}
+                  </strong></p>
+                  <p>Time Difference: <strong style={{color: estResult.compare.minutesDiff > 0 ? '#f44336' : '#4CAF50'}}>
+                    {estResult.compare.minutesDiff > 0 ? '+' : ''}{estResult.compare.minutesDiff} min
+                  </strong></p>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
