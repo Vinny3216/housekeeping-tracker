@@ -25,7 +25,7 @@ function App() {
   const [hourlyRate, setHourlyRate] = useState('16.5')
   const [stats, setStats] = useState(null)
 
-  // page: 'form' | 'history' | 'stats'
+  // page: 'form' | 'history' | 'stats' | 'estimator'
   const [currentPage, setCurrentPage] = useState('form')
 
   // edit mode
@@ -33,6 +33,16 @@ function App() {
 
   // history month expand
   const [expandedMonth, setExpandedMonth] = useState(null)
+
+  // estimator
+  const [estCheckout, setEstCheckout] = useState('')
+  const [estStayover, setEstStayover] = useState('')
+  const [estInTime, setEstInTime] = useState('')
+  const [estBreak, setEstBreak] = useState('0.5')
+  const [estOutTime, setEstOutTime] = useState('')
+  const [estTargetRph, setEstTargetRph] = useState('')
+  const [estMode, setEstMode] = useState('outtime')
+  const [estResult, setEstResult] = useState(null)
 
   // load records on mount
   useEffect(() => {
@@ -247,6 +257,81 @@ function App() {
     return formatTime12(toDbTime(parsed.hour, parsed.minute))
   }
 
+  // calculate standard estimate
+  function calculateStandard() {
+    const inParsed = parseTimeInput(estInTime)
+    if (!inParsed || !estCheckout || !estStayover) {
+      alert('Please fill in In Time, C/O and S/O')
+      return
+    }
+
+    const coNum = parseInt(estCheckout)
+    const soNum = parseInt(estStayover)
+    const breakVal = parseFloat(estBreak) || 0
+    const totalRooms = coNum + soNum
+
+    // standard: 40 min per C/O, 20 min per S/O
+    const standardMinutes = coNum * 40 + soNum * 20
+    const standardHours = standardMinutes / 60
+
+    // standard out time
+    const inTotalMinutes = inParsed.hour * 60 + inParsed.minute
+    const outTotalMinutes = inTotalMinutes + standardMinutes + breakVal * 60
+    const outHour = Math.floor(outTotalMinutes / 60)
+    const outMinute = Math.round(outTotalMinutes % 60)
+
+    // standard RPH
+    const standardRph = totalRooms / standardHours
+
+    // comparison
+    let compare = null
+
+    if (estMode === 'outtime' && estOutTime) {
+      const outParsed = parseTimeInput(estOutTime)
+      if (outParsed) {
+        const actualInDecimal = inParsed.hour + inParsed.minute / 60
+        const actualOutDecimal = outParsed.hour + outParsed.minute / 60
+        const actualWorkHours = actualOutDecimal - actualInDecimal - breakVal
+        if (actualWorkHours > 0) {
+          const actualRph = totalRooms / actualWorkHours
+          const diffMinutes = (actualWorkHours - standardHours) * 60
+          compare = {
+            workHours: Math.round(actualWorkHours * 100) / 100,
+            rph: Math.round(actualRph * 100) / 100,
+            rphDiff: Math.round((actualRph - standardRph) * 100) / 100,
+            minutesDiff: Math.round(diffMinutes)
+          }
+        }
+      }
+    }
+
+    if (estMode === 'rph' && estTargetRph) {
+      const targetRph = parseFloat(estTargetRph)
+      if (targetRph > 0) {
+        const neededHours = totalRooms / targetRph
+        const neededOutMinutes = inTotalMinutes + neededHours * 60 + breakVal * 60
+        const neededOutHour = Math.floor(neededOutMinutes / 60)
+        const neededOutMin = Math.round(neededOutMinutes % 60)
+        const diffMinutes = (neededHours - standardHours) * 60
+        compare = {
+          workHours: Math.round(neededHours * 100) / 100,
+          rph: targetRph,
+          outTime: toDbTime(neededOutHour, neededOutMin),
+          rphDiff: Math.round((targetRph - standardRph) * 100) / 100,
+          minutesDiff: Math.round(diffMinutes)
+        }
+      }
+    }
+
+    setEstResult({
+      standardMinutes,
+      standardHours: Math.round(standardHours * 100) / 100,
+      standardRph: Math.round(standardRph * 100) / 100,
+      standardOutTime: toDbTime(outHour, outMinute),
+      compare
+    })
+  }
+
   return (
     <div className="app">
       <h1>Housekeeping Tracker</h1>
@@ -269,6 +354,12 @@ function App() {
           onClick={() => setCurrentPage('stats')}
         >
           Stats
+        </button>
+        <button
+          className={currentPage === 'estimator' ? 'active' : ''}
+          onClick={() => setCurrentPage('estimator')}
+        >
+          Estimator
         </button>
       </div>
 
@@ -429,6 +520,111 @@ function App() {
               <p>Total Hours: <strong>{stats.totalWorkHours}</strong></p>
               <p>Avg Hours/Day: <strong>{stats.avgHoursPerDay}</strong></p>
               <p>Gross Pay (before tax): <strong>${stats.grossPay}</strong></p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {currentPage === 'estimator' && (
+        <div className="form-section">
+          <h2>Standard Time Estimator</h2>
+
+          <div className="field-card">
+            <label>In Time <span className="time-hint">e.g. 800 = 8:00 AM</span></label>
+            <input
+              type="text"
+              inputMode="numeric"
+              placeholder="e.g. 800"
+              value={estInTime}
+              onChange={e => { setEstInTime(e.target.value); setEstResult(null) }}
+            />
+            {estInTime && <div className="time-preview">{timePreview(estInTime)}</div>}
+          </div>
+
+          <div className="field-card">
+            <label>C/O (Checkout Rooms)</label>
+            <input type="number" min="0" value={estCheckout} onChange={e => { setEstCheckout(e.target.value); setEstResult(null) }} />
+          </div>
+
+          <div className="field-card">
+            <label>S/O (Stayover Rooms)</label>
+            <input type="number" min="0" value={estStayover} onChange={e => { setEstStayover(e.target.value); setEstResult(null) }} />
+          </div>
+
+          <div className="field-card">
+            <label>Break</label>
+            <select value={estBreak} onChange={e => { setEstBreak(e.target.value); setEstResult(null) }}>
+              <option value="0">No break</option>
+              <option value="0.5">30 min</option>
+            </select>
+          </div>
+
+          <button className="calc-btn" onClick={calculateStandard}>Calculate Standard</button>
+
+          {estResult && (
+            <div className="result">
+              <p><strong>--- Standard Reference ---</strong></p>
+              <p>Standard Work Time: <strong>{estResult.standardMinutes} min ({estResult.standardHours} hrs)</strong></p>
+              <p>Standard Out Time: <strong>{formatTime12(estResult.standardOutTime)}</strong></p>
+              <p>Standard RPH: <strong>{estResult.standardRph}</strong></p>
+            </div>
+          )}
+
+          {estResult && (
+            <>
+              <div className="field-card" style={{marginTop: '16px'}}>
+                <label>Compare By</label>
+                <select value={estMode} onChange={e => { setEstMode(e.target.value); setEstOutTime(''); setEstTargetRph(''); setEstResult({...estResult, compare: null}) }}>
+                  <option value="outtime">By Out Time</option>
+                  <option value="rph">By Target RPH</option>
+                </select>
+              </div>
+
+              {estMode === 'outtime' && (
+                <div className="field-card">
+                  <label>Your Estimated Out Time <span className="time-hint">e.g. 1430 = 2:30 PM</span></label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="e.g. 1430"
+                    value={estOutTime}
+                    onChange={e => setEstOutTime(e.target.value)}
+                  />
+                  {estOutTime && <div className="time-preview">{timePreview(estOutTime)}</div>}
+                </div>
+              )}
+
+              {estMode === 'rph' && (
+                <div className="field-card">
+                  <label>Your Target RPH</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="e.g. 1.5"
+                    value={estTargetRph}
+                    onChange={e => setEstTargetRph(e.target.value)}
+                  />
+                </div>
+              )}
+
+              <button className="calc-btn" style={{marginTop: '10px'}} onClick={calculateStandard}>Compare</button>
+            </>
+          )}
+
+          {estResult && estResult.compare && (
+            <div className="stats-result">
+              <p><strong>--- Your Estimate vs Standard ---</strong></p>
+              <p>Your Work Hours: <strong>{estResult.compare.workHours} hrs</strong></p>
+              <p>Your RPH: <strong>{estResult.compare.rph}</strong></p>
+              {estMode === 'rph' && estResult.compare.outTime && (
+                <p>You Need to Finish By: <strong>{formatTime12(estResult.compare.outTime)}</strong></p>
+              )}
+              <p>RPH Difference: <strong style={{color: estResult.compare.rphDiff >= 0 ? '#f44336' : '#4CAF50'}}>
+                {estResult.compare.rphDiff > 0 ? '+' : ''}{estResult.compare.rphDiff}
+              </strong></p>
+              <p>Time Difference: <strong style={{color: estResult.compare.minutesDiff > 0 ? '#f44336' : '#4CAF50'}}>
+                {estResult.compare.minutesDiff > 0 ? '+' : ''}{estResult.compare.minutesDiff} min
+              </strong></p>
             </div>
           )}
         </div>
