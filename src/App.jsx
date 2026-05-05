@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
+import Auth from './Auth'
 import './App.css'
 
 function App() {
-  // form inputs
+  // auth state
+  const [session, setSession] = useState(null)
+  const [loading, setLoading] = useState(true)
+
   const [workDate, setWorkDate] = useState('')
   const [checkoutRooms, setCheckoutRooms] = useState('')
   const [stayoverRooms, setStayoverRooms] = useState('')
@@ -11,33 +15,17 @@ function App() {
   const [outTimeInput, setOutTimeInput] = useState('')
   const [breakHours, setBreakHours] = useState('0.5')
   const [note, setNote] = useState('')
-
-  // calculated results
   const [totalHours, setTotalHours] = useState(null)
   const [rph, setRph] = useState(null)
-
-  // history
   const [records, setRecords] = useState([])
-
-  // stats
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [hourlyRate, setHourlyRate] = useState('16.5')
   const [stats, setStats] = useState(null)
-
-  // page
   const [currentPage, setCurrentPage] = useState('form')
-
-  // edit mode
   const [editingId, setEditingId] = useState(null)
-
-  // history month expand
   const [expandedMonth, setExpandedMonth] = useState(null)
-
-  // tools
   const [activeTool, setActiveTool] = useState('estimator')
-
-  // estimator
   const [estCheckout, setEstCheckout] = useState('')
   const [estStayover, setEstStayover] = useState('')
   const [estInTime, setEstInTime] = useState('')
@@ -46,24 +34,34 @@ function App() {
   const [estTargetRph, setEstTargetRph] = useState('')
   const [estMode, setEstMode] = useState('outtime')
   const [estResult, setEstResult] = useState(null)
-
-  // break timer
   const [breakStartTime, setBreakStartTime] = useState('')
   const [breakDuration, setBreakDuration] = useState('30')
   const [breakEndResult, setBreakEndResult] = useState(null)
-
-  // schedule
   const [schedules, setSchedules] = useState([])
   const [scheduleMonth, setScheduleMonth] = useState(() => {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   })
 
-  // load data on mount
+  // listen for auth changes
   useEffect(() => {
-    fetchRecords()
-    fetchSchedules()
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setLoading(false)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+    })
+    return () => subscription.unsubscribe()
   }, [])
+
+  // fetch data when logged in
+  useEffect(() => {
+    if (session) {
+      fetchRecords()
+      fetchSchedules()
+    }
+  }, [session])
 
   function parseTimeInput(val) {
     const num = val.replace(/[^0-9]/g, '')
@@ -111,30 +109,24 @@ function App() {
   function calculate() {
     const inParsed = parseTimeInput(inTimeInput)
     const outParsed = parseTimeInput(outTimeInput)
-
     if (!inParsed || !outParsed || !checkoutRooms || !stayoverRooms) {
       alert('Please fill in all fields. Time format: 813 = 8:13, 1435 = 14:35')
       return
     }
-
     if (inParsed.minute > 59 || outParsed.minute > 59 || inParsed.hour > 23 || outParsed.hour > 23) {
       alert('Invalid time. Hours 0-23, minutes 0-59.')
       return
     }
-
     const inDecimal = inParsed.hour + inParsed.minute / 60
     const outDecimal = outParsed.hour + outParsed.minute / 60
     const breakVal = parseFloat(breakHours) || 0
     const total = outDecimal - inDecimal - breakVal
-
     if (total <= 0) {
       alert('Total hours must be greater than 0. Check your times.')
       return
     }
-
     const rooms = parseInt(checkoutRooms) + parseInt(stayoverRooms)
     const rphVal = rooms / total
-
     setTotalHours(Math.round(total * 100) / 100)
     setRph(Math.round(rphVal * 100) / 100)
   }
@@ -144,10 +136,8 @@ function App() {
       alert('Please calculate first')
       return
     }
-
     const inParsed = parseTimeInput(inTimeInput)
     const outParsed = parseTimeInput(outTimeInput)
-
     const record = {
       work_date: workDate,
       checkout_rooms: parseInt(checkoutRooms),
@@ -157,9 +147,9 @@ function App() {
       break_hours: parseFloat(breakHours),
       total_hours: totalHours,
       rph: rph,
-      note: note
+      note: note,
+      user_id: session.user.id
     }
-
     let error
     if (editingId) {
       const result = await supabase.from('work_records').update(record).eq('id', editingId)
@@ -168,7 +158,6 @@ function App() {
       const result = await supabase.from('work_records').insert([record])
       error = result.error
     }
-
     if (error) {
       alert('Error saving: ' + error.message)
     } else {
@@ -229,7 +218,6 @@ function App() {
       grossPay: Math.round(grossPay * 100) / 100
     })
   }
-
   function timePreview(val) {
     const parsed = parseTimeInput(val)
     if (!parsed) return ''
@@ -300,14 +288,13 @@ function App() {
     })
   }
 
-  // schedule helpers
   async function toggleScheduleDate(dateStr) {
     const existing = schedules.find(s => s.work_date === dateStr)
     if (existing) {
       if (!window.confirm(`Remove shift on ${dateStr}?`)) return
       await supabase.from('schedules').delete().eq('id', existing.id)
     } else {
-      await supabase.from('schedules').insert([{ work_date: dateStr }])
+      await supabase.from('schedules').insert([{ work_date: dateStr, user_id: session.user.id }])
     }
     fetchSchedules()
   }
@@ -339,9 +326,25 @@ function App() {
     return schedules.filter(s => s.work_date.startsWith(scheduleMonth)).length
   }
 
+  async function handleLogout() {
+    await supabase.auth.signOut()
+  }
+
+  // show loading
+  if (loading) return <div className="app"><p>Loading...</p></div>
+
+  // show login page if not logged in
+  if (!session) return <Auth />
+
   return (
     <div className="app">
-      <h1>Housekeeping Tracker</h1>
+      <div className="app-header">
+        <h1>Housekeeping Tracker</h1>
+        <div className="user-info">
+          <span className="user-email">{session.user.email}</span>
+          <button className="logout-btn" onClick={handleLogout}>Logout</button>
+        </div>
+      </div>
 
       <div className="nav">
         <button className={currentPage === 'form' ? 'active' : ''} onClick={() => setCurrentPage('form')}>Record</button>
@@ -354,7 +357,6 @@ function App() {
       {currentPage === 'form' && (
         <div className="form-section">
           <h2>{editingId ? 'Edit Record' : 'New Record'}</h2>
-
           <div className="field-card">
             <label>Date</label>
             <input type="date" value={workDate} onChange={e => setWorkDate(e.target.value)} />
@@ -391,7 +393,6 @@ function App() {
             <label>Note</label>
             <input type="text" placeholder="Optional" value={note} onChange={e => setNote(e.target.value)} />
           </div>
-
           <div className="button-group">
             <button className="calc-btn" onClick={calculate}>Calculate RPH</button>
             {totalHours !== null && (
@@ -399,7 +400,6 @@ function App() {
             )}
             <button className="reset-btn" onClick={clearForm}>Reset</button>
           </div>
-
           {totalHours !== null && (
             <div className="result">
               <p>Total Hours: <strong>{totalHours}</strong></p>
@@ -486,17 +486,14 @@ function App() {
       {currentPage === 'schedule' && (
         <div className="form-section">
           <h2>Work Schedule</h2>
-
           <div className="calendar-nav">
             <button onClick={() => changeMonth(-1)}>◀</button>
             <span className="calendar-title">{scheduleMonth}</span>
             <button onClick={() => changeMonth(1)}>▶</button>
           </div>
-
           <div className="calendar-info">
             <span>{getMonthScheduleCount()} shifts this month</span>
           </div>
-
           <div className="calendar-grid">
             <div className="calendar-header">Sun</div>
             <div className="calendar-header">Mon</div>
